@@ -170,54 +170,22 @@ data HTTP2Settings = HTTP2Settings {
       -- flooding).
     , http2OverrideRstRateLimit :: Maybe Int
 
-      -- | Idle timeout for the underlying HTTP\/2 connection
+      -- | Idle timeout (microseconds) for the client connection
       --
-      -- This setting is specific to the [@http2@
-      -- package's](https://hackage.haskell.org/package/http2) implementation
-      -- of the HTTP\/2 specification. The @http2@ package closes a connection
-      -- if no frame has been read from it for this many microseconds
-      -- (default 30 seconds; see 'Network.HTTP2.Client.allocSimpleConfig').
-      -- This is a rolling timer, reset by /any/ frame arriving on the
-      -- connection, not just gRPC messages.
-      --
-      -- A long-lived gRPC connection that goes quiet for longer than this
-      -- (no RPCs in flight) will therefore be closed even though nothing is
-      -- actually wrong with it. 'http2ClientKeepAlivePingInterval' addresses
-      -- this at the root (by periodically sending a frame to keep the
-      -- connection from ever appearing idle); this setting is a backstop for
-      -- when no keepalive ping is configured, or in case the peer stops
-      -- responding to pings without the underlying TCP connection itself
-      -- failing.
-      --
-      -- 'Nothing' means keep @http2@'s default (30 seconds). Only applies to
-      -- the client; has no effect on the server, which does not use this
-      -- idle-close mechanism in the same way.
+      -- @http2@ closes a connection once no frame has been read from it for
+      -- this long (default 30s; a rolling timer, reset by any frame read).
+      -- 'http2ClientKeepAlivePingInterval' is the primary fix for a healthy
+      -- but quiet connection; this is a backstop for when no ping is
+      -- configured. 'Nothing' keeps @http2@'s default. Client only.
     , http2ClientIdleTimeout :: Maybe Int
 
-      -- | Interval (in microseconds) at which the client sends an HTTP\/2
-      -- @PING@ frame to keep the connection alive
+      -- | Interval (microseconds) for sending an HTTP\/2 keepalive @PING@
       --
-      -- Mirrors keepalive pings as found in other gRPC client implementations
-      -- (e.g. @grpc-go@'s
-      -- [@keepalive.ClientParameters.Time@](https://pkg.go.dev/google.golang.org/grpc/keepalive#ClientParameters)).
-      -- A gRPC connection that carries no traffic for a while (no RPCs in
-      -- flight) would otherwise look indistinguishable, from the transport's
-      -- point of view, from a connection to a peer that silently vanished
-      -- (no TCP-level signal, e.g. behind a NAT or firewall that drops idle
-      -- connections without sending a RST/FIN). A periodic ping turns that
-      -- silence into an active liveness check: if the peer is unreachable,
-      -- the ping itself will eventually time out and trigger a reconnect via
-      -- 'Network.GRPC.Client.connReconnectPolicy'; if the peer is merely
-      -- quiet, the ping also resets @http2@'s idle-close timer (see
-      -- 'http2ClientIdleTimeout'), so a healthy-but-quiet connection is never
-      -- closed out from under the application.
-      --
-      -- The ping payload is fixed by the @http2@ package itself
-      -- (see 'Network.HTTP2.Client.auxSendPing'); this setting only controls
-      -- how often it is sent.
-      --
-      -- 'Nothing' (the default) disables the keepalive ping entirely,
-      -- preserving existing behaviour.
+      -- Mirrors @grpc-go@'s @keepalive.ClientParameters.Time@. Keeps a quiet
+      -- connection from looking idle, and from being indistinguishable from
+      -- one to a peer that vanished silently (e.g. behind a NAT). Also resets
+      -- 'http2ClientIdleTimeout'. Payload is fixed by @http2@ itself
+      -- ('Network.HTTP2.Client.auxSendPing'). 'Nothing' disables it.
     , http2ClientKeepAlivePingInterval :: Maybe Int
     }
   deriving (Show)

@@ -291,9 +291,6 @@ connectSocket connParams attempt connAuthority sock = do
   where
     ConnParams{connHTTP2Settings} = connParams
 
-    -- Only use the idle-timeout override when configured; otherwise keep
-    -- using @http2@'s own default (currently 30s), same as before this
-    -- setting existed.
     allocConfig :: IO HTTP2.Client.Config
     allocConfig =
         case http2ClientIdleTimeout connHTTP2Settings of
@@ -301,8 +298,7 @@ connectSocket connParams attempt connAuthority sock = do
           Just idleTimeoutMicros ->
             HTTP2.Client.allocSimpleConfig' sock writeBufferSize idleTimeoutMicros
 
-    -- Periodically send an HTTP/2 PING to the server, for as long as the
-    -- connection is in scope. See 'http2ClientKeepAlivePingInterval'.
+    -- See 'http2ClientKeepAlivePingInterval'.
     keepAlivePingLoop :: HTTP2.Client.Aux -> Int -> IO ()
     keepAlivePingLoop aux intervalMicros = forever $ do
       threadDelay intervalMicros
