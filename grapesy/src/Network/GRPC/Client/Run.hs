@@ -31,9 +31,11 @@ import Network.GRPC.Client.Connection
 
 import Network.GRPC.Util.Imports
 
+import Control.Concurrent (threadDelay, killThread)
 import Control.Concurrent.MVar (MVar, newMVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (TVar, TMVar)
 import Control.Concurrent.STM qualified as STM
+import Control.Monad (forever)
 import Network.HPACK qualified as HPACK
 import Network.HTTP2.Client qualified as HTTP2.Client
 import Network.HTTP2.TLS.Client qualified as HTTP2.TLS.Client
@@ -274,17 +276,37 @@ connectInsecure connParams attempt addr = do
 -- | Insecure connection over the given socket
 connectSocket :: ConnParams -> Attempt -> String -> Socket -> IO ()
 connectSocket connParams attempt connAuthority sock = do
-    bracket (HTTP2.Client.allocSimpleConfig sock writeBufferSize)
+    bracket allocConfig
             HTTP2.Client.freeSimpleConfig $ \conf ->
-      HTTP2.Client.run clientConfig conf $ \sendRequest _aux -> do
-        let conn = Session.ConnectionToServer sendRequest
-        atomically $
-          STM.writeTVar (attemptState attempt) $
-            ConnectionReady (attemptClosed attempt) conn
-        runOnConnection $ attemptOnConnection attempt
-        takeMVar $ attemptOutOfScope attempt
+      HTTP2.Client.run clientConfig conf $ \sendRequest aux ->
+        bracket (mapM (forkLabelled "grapesy:client:keepalive" . keepAlivePingLoop aux)
+                      (http2ClientKeepAlivePingInterval connHTTP2Settings))
+                (mapM_ killThread) $ \_ -> do
+          let conn = Session.ConnectionToServer sendRequest
+          atomically $
+            STM.writeTVar (attemptState attempt) $
+              ConnectionReady (attemptClosed attempt) conn
+          runOnConnection $ attemptOnConnection attempt
+          takeMVar $ attemptOutOfScope attempt
   where
     ConnParams{connHTTP2Settings} = connParams
+
+    -- Only use the idle-timeout override when configured; otherwise keep
+    -- using @http2@'s own default (currently 30s), same as before this
+    -- setting existed.
+    allocConfig :: IO HTTP2.Client.Config
+    allocConfig =
+        case http2ClientIdleTimeout connHTTP2Settings of
+          Nothing        -> HTTP2.Client.allocSimpleConfig  sock writeBufferSize
+          Just idleTimeoutMicros ->
+            HTTP2.Client.allocSimpleConfig' sock writeBufferSize idleTimeoutMicros
+
+    -- Periodically send an HTTP/2 PING to the server, for as long as the
+    -- connection is in scope. See 'http2ClientKeepAlivePingInterval'.
+    keepAlivePingLoop :: HTTP2.Client.Aux -> Int -> IO ()
+    keepAlivePingLoop aux intervalMicros = forever $ do
+      threadDelay intervalMicros
+      HTTP2.Client.auxSendPing aux
 
     settings :: HTTP2.Client.Settings
     settings = HTTP2.Client.defaultSettings {
